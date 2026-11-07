@@ -39,6 +39,26 @@ import {
     listDevices,
     listDevicesInput,
 } from './tools/devices';
+import {
+    adoptDevice,
+    adoptDeviceInput,
+    createDevice,
+    createDeviceInput,
+    discoverDevices,
+    discoverDevicesInput,
+    getCreateDeviceSettings,
+    getCreateDeviceSettingsInput,
+    getDeviceSettings,
+    getDeviceSettingsInput,
+    listDeviceCreators,
+    listDeviceCreatorsInput,
+    makeRemoveDeviceHandler,
+    putDeviceSetting,
+    putDeviceSettingInput,
+    removeDeviceInput,
+    setDeviceInfo,
+    setDeviceInfoInput,
+} from './tools/device-config';
 import { clearLogs, clearLogsInput, getLogs, getLogsInput } from './tools/logs';
 import {
     getCors,
@@ -143,6 +163,7 @@ function createMcpServer(getMaxRestoreBytes: () => number): McpServer {
                 'Devices: list_devices / get_device / call_device_method (any RPC method); resolve nativeIds with get_id_for_native_id.',
                 'Plugin lifecycle: reload_plugin (after code changes), install_plugin, update_plugins, kill_plugin, disconnect_clients, clear_console.',
                 'Device config: get_storage / set_storage (KV storage), set_mixins, rename_device_id.',
+                'Device lifecycle: list_device_creators → get_create_device_settings → create_device (or discover_devices → adopt_device) to add a camera; get_device_settings / put_device_setting for its settings (including NVR, detection and other mixin settings); set_device_info to rename; remove_device to delete (destructive, triggers a user confirmation prompt).',
                 'Server admin: restart_server, update_server, get_dotenv / set_dotenv, list_users / add_user / remove_user.',
                 'Network: get_local_addresses / set_local_addresses, get_external_addresses / set_external_addresses, get_cors / set_cors.',
                 'Alerts and cluster: list_alerts / remove_alert / clear_alerts, clear_logs, list_cluster_workers.',
@@ -501,6 +522,158 @@ function createMcpServer(getMaxRestoreBytes: () => number): McpServer {
             },
         },
         wrap(callDeviceMethod),
+    );
+
+    server.registerTool(
+        'list_device_creators',
+        {
+            description:
+                'List plugins that can add devices: DeviceCreator providers (manual add, e.g. ONVIF or Reolink by IP) and DeviceDiscovery providers (network scan + adopt). Use the returned `id` as `providerId` for the create/discover tools.',
+            inputSchema: listDeviceCreatorsInput.shape,
+            annotations: {
+                title: 'List device creators',
+                readOnlyHint: true,
+                idempotentHint: true,
+                openWorldHint: false,
+            },
+        },
+        wrap(listDeviceCreators),
+    );
+
+    server.registerTool(
+        'get_create_device_settings',
+        {
+            description:
+                'Get the fields a DeviceCreator needs to add a device (typically name, IP/host, username, password). Pass the values back to create_device keyed by `key`.',
+            inputSchema: getCreateDeviceSettingsInput.shape,
+            annotations: {
+                title: 'Get create-device settings',
+                readOnlyHint: true,
+                idempotentHint: true,
+                openWorldHint: false,
+            },
+        },
+        wrap(getCreateDeviceSettings),
+    );
+
+    server.registerTool(
+        'create_device',
+        {
+            description:
+                'Add a device (e.g. a camera) through a DeviceCreator provider. Returns the new device id and summary. Call get_create_device_settings first for the required keys.',
+            inputSchema: createDeviceInput.shape,
+            annotations: {
+                title: 'Create device',
+                destructiveHint: false,
+                idempotentHint: false,
+                readOnlyHint: false,
+                openWorldHint: true,
+            },
+        },
+        wrap(createDevice),
+    );
+
+    server.registerTool(
+        'discover_devices',
+        {
+            description:
+                'List devices a DeviceDiscovery provider has found on the network, with the settings needed to adopt each one. Pass `scan: true` to run a fresh scan.',
+            inputSchema: discoverDevicesInput.shape,
+            annotations: {
+                title: 'Discover devices',
+                readOnlyHint: true,
+                idempotentHint: false,
+                openWorldHint: true,
+            },
+        },
+        wrap(discoverDevices),
+    );
+
+    server.registerTool(
+        'adopt_device',
+        {
+            description:
+                'Add a discovered device to Scrypted. Use the `nativeId` and `adoptSettings` keys from discover_devices.',
+            inputSchema: adoptDeviceInput.shape,
+            annotations: {
+                title: 'Adopt device',
+                destructiveHint: false,
+                idempotentHint: false,
+                readOnlyHint: false,
+                openWorldHint: true,
+            },
+        },
+        wrap(adoptDevice),
+    );
+
+    server.registerTool(
+        'get_device_settings',
+        {
+            description:
+                "Get a device's settings, merged across the device and every mixin (NVR recording, object detection, snapshot, HomeKit, ...). Filter with `group` because cameras expose many settings. Passwords are masked unless `revealPasswords` is true.",
+            inputSchema: getDeviceSettingsInput.shape,
+            annotations: {
+                title: 'Get device settings',
+                readOnlyHint: true,
+                idempotentHint: true,
+                openWorldHint: false,
+            },
+        },
+        wrap(getDeviceSettings),
+    );
+
+    server.registerTool(
+        'put_device_setting',
+        {
+            description:
+                'Change one device setting, using the `key` exactly as returned by get_device_settings (mixin keys are routed to their mixin). Returns the value read back after the write.',
+            inputSchema: putDeviceSettingInput.shape,
+            annotations: {
+                title: 'Put device setting',
+                destructiveHint: true,
+                idempotentHint: true,
+                readOnlyHint: false,
+                openWorldHint: false,
+            },
+        },
+        wrap(putDeviceSetting),
+    );
+
+    server.registerTool(
+        'set_device_info',
+        {
+            description: "Set a device's display name, room, and/or type.",
+            inputSchema: setDeviceInfoInput.shape,
+            annotations: {
+                title: 'Set device info',
+                destructiveHint: false,
+                idempotentHint: true,
+                readOnlyHint: false,
+                openWorldHint: false,
+            },
+        },
+        wrap(setDeviceInfo),
+    );
+
+    server.registerTool(
+        'remove_device',
+        {
+            description: [
+                'Permanently remove a device provided by a plugin (e.g. a camera). DESTRUCTIVE: deletes its settings and mixin',
+                'configuration; recordings on disk are left alone. Refuses plugin root devices (that would uninstall the plugin).',
+                'Three gates: (1) `confirm` must equal "REMOVE DEVICE <id>" verbatim, (2) the MCP client must support elicitation',
+                'and the user must accept the in-app prompt, (3) the agent must name the device to the user before invoking.',
+            ].join(' '),
+            inputSchema: removeDeviceInput.shape,
+            annotations: {
+                title: 'Remove device',
+                destructiveHint: true,
+                idempotentHint: false,
+                readOnlyHint: false,
+                openWorldHint: false,
+            },
+        },
+        wrap(makeRemoveDeviceHandler(server)),
     );
 
     server.registerTool(
