@@ -37,16 +37,18 @@ export const listPluginsInput = z.object({});
 
 export async function listPlugins() {
     const state = systemManager.getSystemState();
-    // A plugin's controller device has type 'API' — but a more robust signal is a populated
-    // `pluginId` property equal to the device's own nativeId. We surface both ids and the
-    // human-readable name so the LLM can pick the right one for follow-ups.
+    // Every device carries a `pluginId`, so filtering on that alone lists cameras, sirens and
+    // users too. A plugin's own root device is the one with no nativeId. We surface both ids
+    // and the human-readable name so the LLM can pick the right one for follow-ups.
     const plugins: Array<{ id: string; pluginId: string; name: string; type: string }> = [];
     for (const id of Object.keys(state)) {
         const dev = state[id];
         const pluginId = dev?.pluginId?.value;
         const name = dev?.name?.value;
         const type = dev?.type?.value;
-        if (pluginId && name) plugins.push({ id, pluginId, name, type: type ?? '' });
+        const nativeId = dev?.nativeId?.value;
+        if (pluginId && name && (nativeId === undefined || nativeId === null))
+            plugins.push({ id, pluginId, name, type: type ?? '' });
     }
     plugins.sort((a, b) => a.name.localeCompare(b.name));
     return { count: plugins.length, plugins };

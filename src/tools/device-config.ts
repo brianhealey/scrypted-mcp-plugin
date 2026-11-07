@@ -236,7 +236,17 @@ export async function setDeviceInfo(args: z.infer<typeof setDeviceInfoInput>) {
     if (args.name !== undefined) await dev.setName(args.name);
     if (args.room !== undefined) await dev.setRoom(args.room);
     if (args.type !== undefined) await dev.setType(args.type);
-    return { updated: deviceSummary(args.id) };
+    // System state lags the setter by a tick, so overlay the values we just wrote rather than
+    // reporting the pre-change name back to the caller.
+    const summary = deviceSummary(args.id);
+    return {
+        updated: {
+            ...summary,
+            ...(args.name !== undefined && { name: args.name }),
+            ...(args.room !== undefined && { room: args.room }),
+            ...(args.type !== undefined && { type: args.type }),
+        },
+    };
 }
 
 export const removeDeviceInput = z.object({
