@@ -31,6 +31,7 @@ interface PluginComponent {
     getIdForNativeId(pluginId: string, nativeId: string | undefined): Promise<string | undefined>;
     disconnectClients(pluginId: string): Promise<void>;
     clearConsole(id: string): Promise<void>;
+    readConsole(id: string): Promise<string>;
 }
 
 export const listPluginsInput = z.object({});
@@ -233,4 +234,54 @@ export async function clearConsole(args: z.infer<typeof clearConsoleInput>) {
     const plugins = await getComponent<PluginComponent>('plugins');
     await plugins.clearConsole(args.id);
     return { cleared: args.id };
+}
+
+export const readConsoleInput = z.object({
+    id: z
+        .string()
+        .describe(
+            "Scrypted device id whose console buffer to read (the `id` field from list_devices or list_plugins). A plugin id reads the plugin-wide console; a device id reads that device's console.",
+        ),
+    tail: z
+        .number()
+        .int()
+        .min(1)
+        .max(5000)
+        .optional()
+        .describe('Return only the last N lines (after filtering). Defaults to 200.'),
+    filter: z
+        .string()
+        .optional()
+        .describe(
+            'Case-insensitive regular expression; only matching lines are returned. Falls back to a plain substring match if the pattern is not valid regex.',
+        ),
+});
+
+// Plugin consoles are colourised for the web UI; the ANSI escapes are noise to an LLM.
+// Matching ESC is the point of this pattern, so the control-character lint does not apply.
+// eslint-disable-next-line no-control-regex
+const ANSI_ESCAPE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+
+export async function readConsole(args: z.infer<typeof readConsoleInput>) {
+    const plugins = await getComponent<PluginComponent>('plugins');
+    const raw = (await plugins.readConsole(args.id)) ?? '';
+    let lines = raw.replace(ANSI_ESCAPE, '').split(/\r?\n/);
+    if (lines.length && lines[lines.length - 1] === '') lines.pop();
+    const totalLines = lines.length;
+    if (args.filter) {
+        let match: (l: string) => boolean;
+        try {
+            const re = new RegExp(args.filter, 'i');
+            match = l => re.test(l);
+        } catch {
+            const needle = args.filter.toLowerCase();
+            match = l => l.toLowerCase().includes(needle);
+        }
+        lines = lines.filter(match);
+    }
+    const matchedLines = lines.length;
+    const tail = args.tail ?? 200;
+    const truncated = lines.length > tail;
+    if (truncated) lines = lines.slice(-tail);
+    return { id: args.id, totalLines, matchedLines, returnedLines: lines.length, truncated, text: lines.join('\n') };
 }

@@ -77,6 +77,8 @@ import {
 import {
     clearConsole,
     clearConsoleInput,
+    readConsole,
+    readConsoleInput,
     disconnectClients,
     disconnectClientsInput,
     getIdForNativeId,
@@ -155,13 +157,13 @@ function wrap<TArgs, TResult>(handler: (args: TArgs) => Promise<TResult>, opts: 
 // instance directly.
 function createMcpServer(getMaxRestoreBytes: () => number): McpServer {
     const server = new McpServer(
-        { name: 'scrypted-mcp', version: '99.0.0' },
+        { name: 'scrypted-mcp', version: '99.1.0' },
         {
             instructions: [
                 'This MCP server runs inside a Scrypted plugin and controls the same Scrypted server (https://scrypted.app).',
                 'Inspect: list_plugins / get_plugin_info / get_logs / get_server_info / npm_info.',
                 'Devices: list_devices / get_device / call_device_method (any RPC method); resolve nativeIds with get_id_for_native_id.',
-                'Plugin lifecycle: reload_plugin (after code changes), install_plugin, update_plugins, kill_plugin, disconnect_clients, clear_console.',
+                'Plugin lifecycle: reload_plugin (after code changes), install_plugin, update_plugins, kill_plugin, disconnect_clients, read_console / clear_console.',
                 'Device config: get_storage / set_storage (KV storage), set_mixins, rename_device_id.',
                 'Device lifecycle: list_device_creators → get_create_device_settings → create_device (or discover_devices → adopt_device) to add a camera; get_device_settings / put_device_setting for its settings (including NVR, detection and other mixin settings); set_device_info to rename; remove_device to delete (destructive, triggers a user confirmation prompt).',
                 'Server admin: restart_server, update_server, get_dotenv / set_dotenv, list_users / add_user / remove_user.',
@@ -398,6 +400,22 @@ function createMcpServer(getMaxRestoreBytes: () => number): McpServer {
             },
         },
         wrap(clearConsole),
+    );
+
+    server.registerTool(
+        'read_console',
+        {
+            description:
+                'Read a plugin or device console buffer (what the Scrypted UI shows under Console): diagnostics reports, plugin errors, per-camera stream and detection logs. Returns the last `tail` lines (default 200), optionally filtered by a case-insensitive regex, with ANSI colour codes stripped.',
+            inputSchema: readConsoleInput.shape,
+            annotations: {
+                title: 'Read device console',
+                readOnlyHint: true,
+                idempotentHint: true,
+                openWorldHint: false,
+            },
+        },
+        wrap(readConsole),
     );
 
     server.registerTool(
