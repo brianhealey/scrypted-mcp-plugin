@@ -1,3 +1,4 @@
+import net from 'node:net';
 import { z } from 'zod';
 import { getComponent, systemManager } from '../scrypted';
 
@@ -31,7 +32,10 @@ interface PluginComponent {
     getIdForNativeId(pluginId: string, nativeId: string | undefined): Promise<string | undefined>;
     disconnectClients(pluginId: string): Promise<void>;
     clearConsole(id: string): Promise<void>;
+    // Added in the server after 0.147.0; older servers only expose the console via
+    // getRemoteServicePort, see readConsoleViaPort.
     readConsole(id: string): Promise<string>;
+    getRemoteServicePort(pluginId: string, name: string): Promise<[number, string | undefined]>;
 }
 
 export const listPluginsInput = z.object({});
@@ -262,9 +266,57 @@ export const readConsoleInput = z.object({
 // eslint-disable-next-line no-control-regex
 const ANSI_ESCAPE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 
+// The console read port (plugin-console.ts in the server) takes the device's nativeId as its
+// first line ("undefined" for the plugin root), replies with the buffered history, then keeps
+// streaming live output. We take the history and hang up once the socket goes quiet.
+const CONSOLE_IDLE_MS = 400;
+const CONSOLE_MAX_MS = 5000;
+
+async function readConsoleViaPort(plugins: PluginComponent, id: string): Promise<string> {
+    const dev = systemManager.getDeviceById(id) as { pluginId?: string; nativeId?: string } | undefined;
+    if (!dev?.pluginId) throw new Error(`device ${id} not found`);
+    const [port, host] = await plugins.getRemoteServicePort(dev.pluginId, 'console');
+    return new Promise<string>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        const socket = net.connect(port, host || '127.0.0.1');
+        let idle: NodeJS.Timeout | undefined;
+        const finish = () => {
+            clearTimeout(idle);
+            clearTimeout(deadline);
+            socket.destroy();
+            resolve(Buffer.concat(chunks).toString());
+        };
+        const deadline = setTimeout(finish, CONSOLE_MAX_MS);
+        socket.on('connect', () => {
+            socket.write(`${dev.nativeId ?? 'undefined'}\n`);
+            // An empty console never sends anything, so arm the idle timer up front too.
+            idle = setTimeout(finish, CONSOLE_IDLE_MS);
+        });
+        socket.on('data', (data: Buffer) => {
+            chunks.push(data);
+            clearTimeout(idle);
+            idle = setTimeout(finish, CONSOLE_IDLE_MS);
+        });
+        socket.on('error', e => {
+            clearTimeout(idle);
+            clearTimeout(deadline);
+            reject(e);
+        });
+        socket.on('close', finish);
+    });
+}
+
 export async function readConsole(args: z.infer<typeof readConsoleInput>) {
     const plugins = await getComponent<PluginComponent>('plugins');
-    const raw = (await plugins.readConsole(args.id)) ?? '';
+    let raw: string;
+    try {
+        raw = (await plugins.readConsole(args.id)) ?? '';
+    } catch (e: any) {
+        // RPC proxies can't be feature-tested ahead of time; the server reports a missing
+        // method as this error, which is the signal to use the older port protocol.
+        if (!/does not have method readConsole/.test(String(e?.message))) throw e;
+        raw = await readConsoleViaPort(plugins, args.id);
+    }
     let lines = raw.replace(ANSI_ESCAPE, '').split(/\r?\n/);
     if (lines.length && lines[lines.length - 1] === '') lines.pop();
     const totalLines = lines.length;

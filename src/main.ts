@@ -157,7 +157,7 @@ function wrap<TArgs, TResult>(handler: (args: TArgs) => Promise<TResult>, opts: 
 // instance directly.
 function createMcpServer(getMaxRestoreBytes: () => number): McpServer {
     const server = new McpServer(
-        { name: 'scrypted-mcp', version: '99.1.0' },
+        { name: 'scrypted-mcp', version: '99.1.1' },
         {
             instructions: [
                 'This MCP server runs inside a Scrypted plugin and controls the same Scrypted server (https://scrypted.app).',
